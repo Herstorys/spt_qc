@@ -28,3 +28,8 @@ net:
   unpool: 'index'
   fusion: 'cat'
   norm_mode: 'graph'
+
+  # 启用PnP3D特征融合
+  use_pnp3d: true
+  pnp3d_fusion: "add"  # 或 "concat"
+  pnp3d_stage: 1  # PnP3D特征融合的阶段

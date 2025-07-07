@@ -4,6 +4,7 @@ from src.nn import Stage, PointStage, DownNFuseStage, UpNFuseStage, \
     BatchNorm, CatFusion, MLP, LayerNorm
 from src.nn.pool import BaseAttentivePool
 from src.nn.pool import pool_factory
+from src.models.components.pnp3d import PnP3D
 
 __all__ = ['SPT']
 
@@ -318,7 +319,12 @@ class SPT(nn.Module):
             unpool='index',
             fusion='cat',
             norm_mode='graph',
-            output_stage_wise=False):
+            output_stage_wise=False,
+            # PnP3D相关参数
+            use_pnp3d=False,
+            pnp3d_stage=1,  # 在哪一层应用PnP3D
+            pnp3d_fusion='add',  # 'add', 'concat', 'residual'
+    ):
         super().__init__()
 
         self.nano = nano
@@ -331,6 +337,22 @@ class SPT(nn.Module):
         self.blocks_share_rpe = blocks_share_rpe
         self.heads_share_rpe = heads_share_rpe
         self.output_stage_wise = output_stage_wise
+
+        # PnP3D模块初始化
+        self.use_pnp3d = use_pnp3d
+        self.pnp3d_stage = pnp3d_stage
+        self.pnp3d_fusion = pnp3d_fusion
+
+        if self.use_pnp3d:
+            # 根据应用的stage确定特征维度
+            if self.pnp3d_stage == 0:
+                pnp3d_dim = self.first_stage.out_dim
+            elif self.pnp3d_stage <= len(down_dim):
+                pnp3d_dim = down_dim[self.pnp3d_stage - 1]
+            else:
+                raise ValueError(f"pnp3d_stage {self.pnp3d_stage} exceeds number of stages")
+
+            self.pnp3d = PnP3D(pnp3d_dim)
 
         # Convert input arguments to nested lists
         (
@@ -698,6 +720,10 @@ class SPT(nn.Module):
             edge_index=nag[0].edge_index,
             edge_attr=nag[0].edge_attr)
 
+        # 在第0层应用PnP3D
+        if self.use_pnp3d and self.pnp3d_stage == 0:
+            x = self._apply_pnp3d(x, nag[0].pos)
+
         # Add the diameter to the next level's attributes
         nag[1].diameter = diameter
 
@@ -741,6 +767,11 @@ class SPT(nn.Module):
 
                 # Forward on the DownNFuseStage
                 x, diameter = self._forward_down_stage(stage, nag, i_level, x)
+
+                # 在第0层应用PnP3D
+                if self.use_pnp3d and self.pnp3d_stage == 0:
+                    x = self._apply_pnp3d(x, nag[0].pos)
+
                 down_outputs.append(x)
 
                 # End here if we reached the last NAG level
@@ -769,6 +800,19 @@ class SPT(nn.Module):
             return out
 
         return x
+
+    def _apply_pnp3d(self, features, pos):
+        """应用PnP3D模块到特征上"""
+        pnp3d_features = self.pnp3d(pos, features)
+
+        if self.pnp3d_fusion == 'add':
+            return features + pnp3d_features
+        elif self.pnp3d_fusion == 'concat':
+            return torch.cat([features, pnp3d_features], dim=-1)
+        elif self.pnp3d_fusion == 'residual':
+            return features + 0.1 * pnp3d_features
+        else:
+            raise ValueError(f"Unknown pnp3d_fusion: {self.pnp3d_fusion}")
 
     def _forward_down_stage(self, stage, nag, i_level, x):
         is_last_level = (i_level == nag.num_levels - 1)
