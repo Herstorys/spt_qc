@@ -1,3 +1,4 @@
+import torch
 from torch import nn
 from src.utils import listify_with_reference
 from src.nn import Stage, PointStage, DownNFuseStage, UpNFuseStage, \
