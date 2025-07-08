@@ -344,17 +344,6 @@ class SPT(nn.Module):
         self.pnp3d_stage = pnp3d_stage
         self.pnp3d_fusion = pnp3d_fusion
 
-        if self.use_pnp3d:
-            # 根据应用的stage确定特征维度
-            if self.pnp3d_stage == 0:
-                pnp3d_dim = self.first_stage.out_dim
-            elif self.pnp3d_stage <= len(down_dim):
-                pnp3d_dim = down_dim[self.pnp3d_stage - 1]
-            else:
-                raise ValueError(f"pnp3d_stage {self.pnp3d_stage} exceeds number of stages")
-
-            self.pnp3d = PnP3D(pnp3d_dim)
-
         # Convert input arguments to nested lists
         (
             down_dim,
@@ -658,6 +647,31 @@ class SPT(nn.Module):
         else:
             self.up_stages = None
 
+        if self.use_pnp3d:
+            # 根据应用的stage确定特征维度
+            if self.pnp3d_stage == 0:
+                pnp3d_dim = self.first_stage.out_dim
+            elif self.pnp3d_stage <= len(down_dim):
+                pnp3d_dim = down_dim[self.pnp3d_stage - 1]
+            else:
+                raise ValueError(f"pnp3d_stage {self.pnp3d_stage} exceeds number of stages")
+
+            self.pnp3d = PnP3D(pnp3d_dim)
+
+            # 为高级融合策略添加必要的MLP
+            if self.pnp3d_fusion == 'gated':
+                self.gate_mlp = MLP(
+                    [pnp3d_dim * 2, pnp3d_dim, 1],
+                    activation=mlp_activation,
+                    norm=mlp_norm
+                )
+            elif self.pnp3d_fusion == 'attention':
+                self.attention_mlp = MLP(
+                    [pnp3d_dim * 2, pnp3d_dim, 1],
+                    activation=mlp_activation,
+                    norm=mlp_norm
+                )
+
         assert self.num_up_stages > 0 or not self.output_stage_wise, \
             "At least one up stage is needed for output_stage_wise=True"
 
@@ -770,8 +784,8 @@ class SPT(nn.Module):
                 x, diameter = self._forward_down_stage(stage, nag, i_level, x)
 
                 # 在第0层应用PnP3D
-                if self.use_pnp3d and self.pnp3d_stage == 0:
-                    x = self._apply_pnp3d(x, nag[0].pos)
+                if self.use_pnp3d and self.pnp3d_stage == i_stage + 1:
+                    x = self._apply_pnp3d(x, nag[i_level].pos)
 
                 down_outputs.append(x)
 
@@ -812,6 +826,14 @@ class SPT(nn.Module):
             return torch.cat([features, pnp3d_features], dim=-1)
         elif self.pnp3d_fusion == 'residual':
             return features + 0.1 * pnp3d_features
+        elif self.pnp3d_fusion == 'gated':
+            # 门控融合
+            gate = torch.sigmoid(self.gate_mlp(torch.cat([features, pnp3d_features], dim=-1)))
+            return gate * features + (1 - gate) * pnp3d_features
+        elif self.pnp3d_fusion == 'attention':
+            # 注意力融合
+            attn_weights = self.attention_mlp(torch.cat([features, pnp3d_features], dim=-1))
+            return attn_weights * features + (1 - attn_weights) * pnp3d_features
         else:
             raise ValueError(f"Unknown pnp3d_fusion: {self.pnp3d_fusion}")
 
