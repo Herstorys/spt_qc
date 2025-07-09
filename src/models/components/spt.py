@@ -827,8 +827,6 @@ class SPT(nn.Module):
 
         if self.pnp3d_fusion == 'add':
             return features + pnp3d_features
-        elif self.pnp3d_fusion == 'concat':
-            return torch.cat([features, pnp3d_features], dim=-1)
         elif self.pnp3d_fusion == 'residual':
             return features + 0.1 * pnp3d_features
         elif self.pnp3d_fusion == 'gated':
