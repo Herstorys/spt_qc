@@ -33,3 +33,4 @@ net:
   use_pnp3d: true
   pnp3d_fusion: "attention"  # 或 "concat" 或 "residual"
   pnp3d_stage: [0, 1, 2]  # PnP3D特征融合的阶段
+  pnp3d_k: 8  # PnP3D特征融合的k值

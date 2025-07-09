@@ -3,12 +3,59 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+# def knn(x, k):
+#     inner = -2 * torch.matmul(x.transpose(2, 1), x)
+#     xx = torch.sum(x ** 2, dim=1, keepdim=True)
+#     pairwise_distance = -xx - inner - xx.transpose(2, 1)
+#
+#     idx = pairwise_distance.topk(k=k, dim=-1)[1]  # (batch_size, num_points, k)
+#     return idx
+
 def knn(x, k):
+    """
+    高效的k近邻计算，避免创建巨大的距离矩阵
+    x: (batch_size, 3, num_points)
+    """
+    batch_size, _, num_points = x.size()
+
+    # 如果点数太多，使用分块处理
+    if num_points > 10000:  # 设置阈值
+        return knn_chunked(x, k, chunk_size=5000)
+
+    # 原始实现（适用于小规模数据）
     inner = -2 * torch.matmul(x.transpose(2, 1), x)
-    xx = torch.sum(x ** 2, dim=1, keepdim=True)
+    xx = torch.sum(x**2, dim=1, keepdim=True)
     pairwise_distance = -xx - inner - xx.transpose(2, 1)
 
-    idx = pairwise_distance.topk(k=k, dim=-1)[1]  # (batch_size, num_points, k)
+    idx = pairwise_distance.topk(k=k, dim=-1)[1]
+    return idx
+
+def knn_chunked(x, k, chunk_size=5000):
+    """
+    分块计算k近邻，减少内存使用
+    """
+    batch_size, _, num_points = x.size()
+    device = x.device
+
+    # 初始化结果张量
+    idx = torch.zeros(batch_size, num_points, k, dtype=torch.long, device=device)
+
+    # 分块处理
+    for i in range(0, num_points, chunk_size):
+        end_i = min(i + chunk_size, num_points)
+        chunk_x = x[:, :, i:end_i]  # (batch_size, 3, chunk_size)
+
+        # 计算当前块与所有点的距离
+        inner = -2 * torch.matmul(chunk_x.transpose(2, 1), x)  # (batch_size, chunk_size, num_points)
+        xx_chunk = torch.sum(chunk_x**2, dim=1, keepdim=True)  # (batch_size, 1, chunk_size)
+        xx_all = torch.sum(x**2, dim=1, keepdim=True)  # (batch_size, 1, num_points)
+
+        pairwise_distance = -xx_chunk.transpose(2, 1) - inner - xx_all
+
+        # 获取k个最近邻
+        chunk_idx = pairwise_distance.topk(k=k, dim=-1)[1]
+        idx[:, i:end_i, :] = chunk_idx
+
     return idx
 
 
