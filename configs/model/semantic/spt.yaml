@@ -31,5 +31,5 @@ net:
 
   # 启用PnP3D特征融合
   use_pnp3d: true
-  pnp3d_fusion: "residual"  # 或 "concat" 或 "residual"
+  pnp3d_fusion: "gated"  # 或 "concat" 或 "residual"
   pnp3d_k: 8  # PnP3D特征融合的k值
