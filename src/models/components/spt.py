@@ -6,6 +6,7 @@ from src.nn import Stage, PointStage, DownNFuseStage, UpNFuseStage, \
 from src.nn.pool import BaseAttentivePool
 from src.nn.pool import pool_factory
 from src.models.components.pnp3d import PnP3D
+from src.models.components.group_atte import GroupAttention
 from omegaconf import OmegaConf
 
 __all__ = ['SPT']
@@ -325,7 +326,10 @@ class SPT(nn.Module):
             # PnP3D相关参数
             use_pnp3d=False,
             pnp3d_fusion='add',  # 'add', 'concat', 'residual'
-            pnp3d_k=16
+            pnp3d_k=16,
+            use_group_attention = True,
+            num_attention_groups = 4,
+            group_attention_mode = 'spatial',  # 'spatial', 'feature', 'random'
     ):
         super().__init__()
 

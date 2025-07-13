@@ -26,3 +26,7 @@ net:
   stages_share_rpe: False
   blocks_share_rpe: False
   heads_share_rpe: False
+
+  use_group_attention: true
+  num_attention_groups: 4
+  group_attention_mode: "spatial"  # 可选: "spatial", "feature", "learnable", "random"

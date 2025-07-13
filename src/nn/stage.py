@@ -109,6 +109,10 @@ class Stage(nn.Module):
             q_on_minus_rpe=False,
             blocks_share_rpe=False,
             heads_share_rpe=False,
+            # 新增分组注意力参数
+            use_group_attention=False,
+            num_attention_groups=4,
+            group_attention_mode='spatial',
             **transformer_kwargs):
 
         super().__init__()
@@ -116,6 +120,11 @@ class Stage(nn.Module):
         self.dim = dim
         self.num_blocks = num_blocks
         self.num_heads = num_heads
+
+        # 分组注意力参数
+        self.use_group_attention = use_group_attention
+        self.num_attention_groups = num_attention_groups
+        self.group_attention_mode = group_attention_mode
 
         # MLP to change input channel size
         if in_mlp is not None:
@@ -141,42 +150,52 @@ class Stage(nn.Module):
 
         # Transformer blocks
         if num_blocks > 0:
+            if use_group_attention:
+                # 使用分组注意力替换原有的TransformerBlock
+                self.transformer_blocks = nn.ModuleList([
+                    GroupAttention(
+                        embed_dim=dim,
+                        num_heads=num_heads,
+                        num_groups=num_attention_groups,
+                        group_mode=group_attention_mode
+                    ) for _ in range(num_blocks)
+                ])
+            else:
+                # Build the RPE encoders here if shared across all blocks
+                k_rpe_blocks = _build_shared_rpe_encoders(
+                    k_rpe, num_blocks, num_heads, 18, qk_dim, blocks_share_rpe,
+                    heads_share_rpe)
 
-            # Build the RPE encoders here if shared across all blocks
-            k_rpe_blocks = _build_shared_rpe_encoders(
-                k_rpe, num_blocks, num_heads, 18, qk_dim, blocks_share_rpe,
-                heads_share_rpe)
+                k_delta_rpe_blocks = _build_shared_rpe_encoders(
+                    k_delta_rpe, num_blocks, num_heads, dim, qk_dim, blocks_share_rpe,
+                    heads_share_rpe)
 
-            k_delta_rpe_blocks = _build_shared_rpe_encoders(
-                k_delta_rpe, num_blocks, num_heads, dim, qk_dim, blocks_share_rpe,
-                heads_share_rpe)
+                # If key and query RPEs share the same MLP, only the key MLP
+                # is preserved, to limit the number of model parameters
+                q_rpe_blocks = _build_shared_rpe_encoders(
+                    q_rpe and not (k_rpe and qk_share_rpe), num_blocks, num_heads,
+                    18, qk_dim, blocks_share_rpe, heads_share_rpe)
 
-            # If key and query RPEs share the same MLP, only the key MLP
-            # is preserved, to limit the number of model parameters
-            q_rpe_blocks = _build_shared_rpe_encoders(
-                q_rpe and not (k_rpe and qk_share_rpe), num_blocks, num_heads,
-                18, qk_dim, blocks_share_rpe, heads_share_rpe)
+                q_delta_rpe_blocks = _build_shared_rpe_encoders(
+                    q_delta_rpe and not (k_delta_rpe and qk_share_rpe),
+                    num_blocks, num_heads, dim, qk_dim, blocks_share_rpe,
+                    heads_share_rpe)
 
-            q_delta_rpe_blocks = _build_shared_rpe_encoders(
-                q_delta_rpe and not (k_delta_rpe and qk_share_rpe),
-                num_blocks, num_heads, dim, qk_dim, blocks_share_rpe,
-                heads_share_rpe)
-
-            self.transformer_blocks = nn.ModuleList(
-                TransformerBlock(
-                    dim,
-                    num_heads=num_heads,
-                    qk_dim=qk_dim,
-                    k_rpe=k_rpe_block,
-                    q_rpe=q_rpe_block,
-                    k_delta_rpe=k_delta_rpe_block,
-                    q_delta_rpe=q_delta_rpe_block,
-                    qk_share_rpe=qk_share_rpe,
-                    q_on_minus_rpe=q_on_minus_rpe,
-                    heads_share_rpe=heads_share_rpe,
-                    **transformer_kwargs)
-                for k_rpe_block, q_rpe_block, k_delta_rpe_block, q_delta_rpe_block
-                in zip(k_rpe_blocks, q_rpe_blocks, k_delta_rpe_blocks, q_delta_rpe_blocks))
+                self.transformer_blocks = nn.ModuleList(
+                    TransformerBlock(
+                        dim,
+                        num_heads=num_heads,
+                        qk_dim=qk_dim,
+                        k_rpe=k_rpe_block,
+                        q_rpe=q_rpe_block,
+                        k_delta_rpe=k_delta_rpe_block,
+                        q_delta_rpe=q_delta_rpe_block,
+                        qk_share_rpe=qk_share_rpe,
+                        q_on_minus_rpe=q_on_minus_rpe,
+                        heads_share_rpe=heads_share_rpe,
+                        **transformer_kwargs)
+                    for k_rpe_block, q_rpe_block, k_delta_rpe_block, q_delta_rpe_block
+                    in zip(k_rpe_blocks, q_rpe_blocks, k_delta_rpe_blocks, q_delta_rpe_blocks))
         else:
             self.transformer_blocks = None
 
@@ -197,7 +216,10 @@ class Stage(nn.Module):
         if self.out_mlp is not None:
             return self.out_mlp.out_dim
         if self.transformer_blocks is not None:
-            return self.transformer_blocks[-1].dim
+            if self.use_group_attention:
+                return self.dim
+            else:
+                return self.transformer_blocks[-1].dim
         if self.in_mlp is not None:
             return self.in_mlp.out_dim
         return self.dim
@@ -264,8 +286,13 @@ class Stage(nn.Module):
         # Transformer blocks
         if self.transformer_blocks is not None:
             for block in self.transformer_blocks:
-                x, norm_index, edge_index = block(
-                    x, norm_index, edge_index=edge_index, edge_attr=edge_attr)
+                if self.use_group_attention:
+                    # 分组注意力
+                    x = block(x, pos=pos, edge_index=edge_index, edge_attr=edge_attr)
+                else:
+                    # 原有的TransformerBlock
+                    x, norm_index, edge_index = block(
+                        x, norm_index, edge_index=edge_index, edge_attr=edge_attr)
 
         # MLP on output features to change channel size
         if self.out_mlp is not None:
