@@ -653,18 +653,33 @@ class SPT(nn.Module):
     def out_dim(self):
         if self.sampling_strategy == 'pyramid':
             if hasattr(self, 'pyramid_processors') and self.pyramid_processors:
-                return self.pyramid_processors[0].out_dim
-            return self.first_stage.out_dim
+                # 为了与语义分割模块兼容，返回列表格式
+                base_dim = self.pyramid_processors[0].out_dim
+                if self.pyramid_fusion == 'concat':
+                    # 如果是拼接融合，输出维度是所有尺度的和
+                    total_dim = base_dim * len(self.pyramid_processors)
+                else:
+                    # 其他融合方式保持原维度
+                    total_dim = base_dim
+
+                # 返回与output_stage_wise=True格式一致的列表
+                if self.output_stage_wise:
+                    return [total_dim] * len(self.pyramid_scales)
+                else:
+                    return [total_dim]  # 包装成列表以保持一致性
+
+            # 如果没有金字塔处理器，使用first_stage的输出维度
+            return [self.first_stage.out_dim]
 
         if self.output_stage_wise:
             out_dim = [stage.out_dim for stage in self.up_stages][::-1]
             out_dim += [self.down_stages[-1].out_dim]
             return out_dim
         if self.up_stages is not None:
-            return self.up_stages[-1].out_dim
+            return [self.up_stages[-1].out_dim]
         if self.down_stages is not None:
-            return self.down_stages[-1].out_dim
-        return self.first_stage.out_dim
+            return [self.down_stages[-1].out_dim]
+        return [self.first_stage.out_dim]
 
     def forward(self, nag):
         if self.sampling_strategy == 'pyramid':
@@ -731,6 +746,11 @@ class SPT(nn.Module):
             final_output = torch.max(stacked_outputs, dim=0)[0]
         else:  # 'first' or default
             final_output = pyramid_outputs[0]
+
+        # 根据output_stage_wise设置返回格式
+        if self.output_stage_wise:
+            # 返回列表格式，每个尺度一个输出
+            return pyramid_outputs if len(pyramid_outputs) > 1 else [final_output]
 
         return final_output
 

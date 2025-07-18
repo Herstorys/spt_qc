@@ -28,6 +28,7 @@ net:
   unpool: 'index'
   fusion: 'cat'
   norm_mode: 'graph'
+  output_stage_wise: False
 
   sampling_strategy: 'pyramid'   # 'hierarchical', 'pyramid', 'hybrid'
   pyramid_scales: [1.0, 0.5, 0.25]
