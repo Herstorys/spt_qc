@@ -29,7 +29,7 @@ net:
   fusion: 'cat'
   norm_mode: 'graph'
 
-  sampling_strategy: 'hierarchical'   # 'hierarchical', 'pyramid', 'hybrid'
+  sampling_strategy: 'pyramid'   # 'hierarchical', 'pyramid', 'hybrid'
   pyramid_scales: [1.0, 0.5, 0.25]
   pyramid_fusion: 'concat'
   pyramid_down_enabled: True
