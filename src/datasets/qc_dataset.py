@@ -141,7 +141,7 @@ class QcDataset(BaseDataset):
         #     'test': test_ids
         # }
         data = {
-            'train': ['area2','area4','area5'],
+            'train': ['area2','area4','area5'], # , 'area7', 'area8', 'area9'
             'val': ['area6'],
             'test': ['area3']
         }
