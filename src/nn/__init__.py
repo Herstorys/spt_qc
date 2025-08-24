@@ -9,3 +9,4 @@ from .transformer import *
 from .stage import *
 from .position_encoding import *
 from .instance import *
+from .kan import *

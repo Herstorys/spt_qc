@@ -1,9 +1,13 @@
+import torch
 from torch import nn
 from src.utils import listify_with_reference
 from src.nn import Stage, PointStage, DownNFuseStage, UpNFuseStage, \
     BatchNorm, CatFusion, MLP, LayerNorm
 from src.nn.pool import BaseAttentivePool
 from src.nn.pool import pool_factory
+from src.models.components.adaptive_sampling import AdaptiveSampler
+from omegaconf import DictConfig
+
 
 __all__ = ['SPT']
 
@@ -251,6 +255,11 @@ class SPT(nn.Module):
         superpoint-based reasoning is to mitigate compute and memory
         by circumventing the need to manipulate such full-resolution
         objects
+    :param use_adaptive_sampler: bool
+        是否在输入点云（或 nano 模式下的第一级超点）上使用自适应采样。
+    :param adaptive_sampler_config: Optional[dict]
+        AdaptiveSampler 的配置字典。
+        预期的键: sample_ratio, radius, max_neighbors, density_aware。
     """
 
     def __init__(
@@ -318,7 +327,9 @@ class SPT(nn.Module):
             unpool='index',
             fusion='cat',
             norm_mode='graph',
-            output_stage_wise=False):
+            output_stage_wise=False,
+            use_adaptive_sampler=False,
+            adaptive_sampler_config=None,):
         super().__init__()
 
         self.nano = nano
@@ -331,6 +342,26 @@ class SPT(nn.Module):
         self.blocks_share_rpe = blocks_share_rpe
         self.heads_share_rpe = heads_share_rpe
         self.output_stage_wise = output_stage_wise
+
+        self.use_adaptive_sampler = use_adaptive_sampler
+        self.adaptive_sampler = None
+        if self.use_adaptive_sampler:
+            params_for_sampler = {}
+            if adaptive_sampler_config is not None:
+                # 允许 adaptive_sampler_config 是 dict 或 DictConfig 类型
+                if isinstance(adaptive_sampler_config, (dict, DictConfig)):
+                    params_for_sampler = adaptive_sampler_config
+                else:
+                    # 如果类型不匹配，则抛出错误
+                    raise TypeError(
+                        f"adaptive_sampler_config must be a dict, OmegaConf DictConfig, or None. "
+                        f"Got type: {type(adaptive_sampler_config)}"
+                    )
+            # 如果 adaptive_sampler_config 为 None, params_for_sampler 将保持为 {} (空字典),
+            # 这将使得 AdaptiveSampler 使用其默认参数。
+            # 如果 adaptive_sampler_config 是 dict 或 DictConfig, 它将被解包。
+            # DictConfig 在解包时会将其内部的原始类型值传递给 AdaptiveSampler。
+            self.adaptive_sampler = AdaptiveSampler(**params_for_sampler)
 
         # Convert input arguments to nested lists
         (
@@ -675,6 +706,47 @@ class SPT(nn.Module):
         # TODO: this will need to be changed if we want FAST NANO
         if self.nano:
             nag = nag[1:]
+
+            # ADDED: Adaptive Sampling Block
+            if self.use_adaptive_sampler and self.adaptive_sampler is not None:
+                current_processing_level_data = nag[0]
+
+                pos_to_sample = current_processing_level_data.pos
+
+                batch_to_sample = getattr(current_processing_level_data, 'batch', None)
+                if batch_to_sample is None:
+                    # print("SPT Warning: nag[0].batch is None. Creating a dummy batch of zeros.")
+                    # Ensure torch is imported at the top of the file: import torch
+                    batch_to_sample = torch.zeros(pos_to_sample.size(0),
+                                                  dtype=torch.long, device=pos_to_sample.device)
+                    current_processing_level_data.batch = batch_to_sample  # Assign back if created
+
+                features_to_sample = getattr(current_processing_level_data, 'x', None)
+
+                # Call the sampler
+                # The sampler is expected to be imported: from src.models.components.adaptive_sampling import AdaptiveSampler
+                sampled_pos, sampled_batch, sampled_features, sampled_idx = self.adaptive_sampler(
+                    pos=pos_to_sample,
+                    batch=batch_to_sample,
+                    features=features_to_sample
+                )
+
+                # Update nag[0] with sampled data
+                current_processing_level_data.pos = sampled_pos
+                current_processing_level_data.batch = sampled_batch
+
+                # Update features if they were provided and sampled
+                current_processing_level_data.x = sampled_features
+
+                # Update super_index if it exists
+                if hasattr(current_processing_level_data, 'super_index') and \
+                        current_processing_level_data.super_index is not None:
+                    current_processing_level_data.super_index = current_processing_level_data.super_index[sampled_idx]
+
+                # Optional: also sample other attributes like 'y' (labels) if they exist
+                if hasattr(current_processing_level_data, 'y') and \
+                        current_processing_level_data.y is not None:
+                    current_processing_level_data.y = current_processing_level_data.y[sampled_idx]
 
         # Apply the first MLPs on the handcrafted features
         if self.nano:
