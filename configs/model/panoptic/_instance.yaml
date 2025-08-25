@@ -29,8 +29,73 @@ edge_affinity_head:
 
 # Instance/panoptic partitioner module. See the `InstancePartitioner`
 # documentation for more details on the available parameters
+#partitioner:
+#  _target_: src.nn.instance.InstancePartitioner
+#
+#  # === 端到端可微分参数 ===
+#  use_end_to_end: true                    # 启用端到端可微分聚类
+#  use_iterative_refinement: false         # 启用迭代细化
+#
+#  # 端到端聚类配置
+#  feature_dim: ${model._up_dim}[-1]                         # 特征维度，应与point encoder输出一致
+#  hidden_dim: ${eval:'${model._up_dim}[-1] * 2'}                         # 隐藏层维度
+#  max_clusters: 50                        # 最大聚类数
+#  clustering_method: 'gnn'                # 聚类方法: 'gnn' 或 'optimal_transport'
+#  use_optimal_transport: false            # 是否使用最优传输作为后处理
+#
+#  # 迭代细化参数（如果启用）
+#  refinement_params:
+#    max_iterations: 3
+#    confidence_threshold: 0.8
+#    purity_threshold: 0.9
+#    split_size_ratio: 0.3
+
+# 选项1: 基础端到端分区器（当前配置）
+# partitioner:
+#   _target_: src.nn.instance.InstancePartitioner
+#   use_end_to_end: true
+#   feature_dim: ${model._up_dim}[-1]
+#   hidden_dim: ${eval:'${model._up_dim}[-1] * 2'}
+#   clustering_method: 'gnn'
+
+# 选项2: 专用可微分分区器
 partitioner:
-  _target_: src.nn.instance.InstancePartitioner
+  _target_: src.nn.instance.DifferentiableInstancePartitioner
+  feature_dim: ${eval:'${model._up_dim}[-1]'}
+  hidden_dim: ${eval:'${model._up_dim}[-1] * 2'}
+  max_clusters: 50
+  clustering_method: 'gnn'
+  use_optimal_transport: false
+
+  # 损失权重
+  semantic_loss_weight: 1.0
+  clustering_loss_weight: 0.5
+  regularization_weight: 0.01
+
+  # 继承传统参数
+  loss_type: l2_kl
+  regularization: 10
+  x_weight: 1e-2
+  p_weight: 1
+  cutoff: 1
+  parallel: true
+  iterations: 10
+
+# 选项3: 自适应分区器
+# partitioner:
+#   _target_: src.nn.instance.AdaptiveInstancePartitioner
+#   feature_dim: ${model._up_dim}[-1]
+#   hidden_dim: ${eval:'${model._up_dim}[-1] * 2'}
+#   max_clusters: 50
+#
+#   # 继承传统参数
+#   loss_type: l2_kl
+#   regularization: 10
+#   x_weight: 1e-2
+#   p_weight: 1
+#   cutoff: 1
+#   parallel: true
+#   iterations: 10
 
 # Frequency at which the partition should be computed. If lower or equal
 # to 0, the partition will only be computed at the last training epoch

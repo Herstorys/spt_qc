@@ -28,7 +28,7 @@ net:
   unpool: 'index'
   fusion: 'cat'
   norm_mode: 'graph'
-  use_adaptive_sampler: True  # 设置为 True 来启用自适应采样，False 则禁用
+  use_adaptive_sampler: False  # 设置为 True 来启用自适应采样，False 则禁用
   adaptive_sampler_config: # AdaptiveSampler 的配置参数
     sample_ratio: 0.5          # 采样比例
     radius: 0.1                # 计算密度的半径
