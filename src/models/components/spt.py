@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from src.utils import listify_with_reference
 from src.nn import Stage, PointStage, DownNFuseStage, UpNFuseStage, \
-    BatchNorm, CatFusion, MLP, LayerNorm
+    BatchNorm, CatFusion, MLP, LayerNorm, KAN
 from src.nn.pool import BaseAttentivePool
 from src.nn.pool import pool_factory
 from src.models.components.adaptive_sampling import AdaptiveSampler
@@ -329,7 +329,14 @@ class SPT(nn.Module):
             norm_mode='graph',
             output_stage_wise=False,
             use_adaptive_sampler=False,
-            adaptive_sampler_config=None,):
+            adaptive_sampler_config=None,
+            # 新增KAN参数
+            use_kan=False,
+            kan_grid=2,
+            kan_k=2,
+            kan_noise_scale=0.1,
+            kan_seed=0,
+    ):
         super().__init__()
 
         self.nano = nano
@@ -362,6 +369,15 @@ class SPT(nn.Module):
             # 如果 adaptive_sampler_config 是 dict 或 DictConfig, 它将被解包。
             # DictConfig 在解包时会将其内部的原始类型值传递给 AdaptiveSampler。
             self.adaptive_sampler = AdaptiveSampler(**params_for_sampler)
+
+        self.use_kan = use_kan
+        kan_config = {
+            'grid': kan_grid,
+            'k': kan_k,
+            'noise_scale': kan_noise_scale,
+            'seed': kan_seed,
+            'device': 'cpu'  # 这里可以根据需要动态设置
+        }
 
         # Convert input arguments to nested lists
         (
@@ -430,7 +446,9 @@ class SPT(nn.Module):
             num_down + self.nano,
             mlp_activation,
             mlp_norm,
-            share_hf_mlps)
+            share_hf_mlps,
+            use_kan=use_kan,
+            kan_config=kan_config)
 
         h_edge_mlp = h_edge_mlp if needs_h_edge_hf else None
         self.h_edge_mlps = _build_mlps(
@@ -438,7 +456,9 @@ class SPT(nn.Module):
             num_down + self.nano,
             mlp_activation,
             mlp_norm,
-            share_hf_mlps)
+            share_hf_mlps,
+            use_kan=use_kan,
+            kan_config=kan_config)
 
         v_edge_mlp = v_edge_mlp if needs_v_edge_hf else None
         self.v_edge_mlps = _build_mlps(
@@ -446,7 +466,9 @@ class SPT(nn.Module):
             num_down,
             mlp_activation,
             mlp_norm,
-            share_hf_mlps)
+            share_hf_mlps,
+            use_kan=use_kan,
+            kan_config=kan_config)
 
         # Module operating on Level-0 points in isolation
         if self.nano:
@@ -898,14 +920,34 @@ def _build_shared_rpe_encoders(
     return [rpe] * num_stages
 
 
-def _build_mlps(layers, num_stage, activation, norm, shared):
+def _build_mlps(layers, num_stage, activation, norm, shared, use_kan=False, kan_config=None):
     if layers is None:
         return [None] * num_stage
 
-    if shared:
-        return nn.ModuleList([
-            MLP(layers, activation=activation, norm=norm)] * num_stage)
+    if use_kan:
+        # KAN配置默认值
+        kan_params = {
+            'grid': 2,
+            'k': 2,
+            'noise_scale': 0.1,
+            'seed': 0,
+            'device': 'cpu'
+        }
+        if kan_config:
+            kan_params.update(kan_config)
 
-    return nn.ModuleList([
-        MLP(layers, activation=activation, norm=norm)
-        for _ in range(num_stage)])
+        if shared:
+            return nn.ModuleList([
+                KAN(dims=layers, **kan_params)] * num_stage)
+
+        return nn.ModuleList([
+            KAN(dims=layers, **kan_params)
+            for _ in range(num_stage)])
+    else:
+        if shared:
+            return nn.ModuleList([
+                MLP(layers, activation=activation, norm=norm)] * num_stage)
+
+        return nn.ModuleList([
+            MLP(layers, activation=activation, norm=norm)
+            for _ in range(num_stage)])
