@@ -1,8 +1,7 @@
 from torch import nn
 from copy import copy
 from itertools import product
-from src.utils.instance import instance_cut_pursuit
-
+from src.utils.instance import instance_cut_pursuit, instance_cut_pursuit_improved
 
 __all__ = ['InstancePartitioner']
 
@@ -67,7 +66,13 @@ class InstancePartitioner(nn.Module):
             trim=False,
             discrepancy_epsilon=1e-4,
             temperature=1,
-            dampening=0):
+            dampening=0,
+            # 新增参数
+            use_iterative_refinement=False,
+            use_learnable_partition=False,
+            refinement_params=None,
+            learnable_model_path=None
+    ):
         super().__init__()
         self.loss_type = loss_type
         self.regularization = regularization
@@ -80,6 +85,17 @@ class InstancePartitioner(nn.Module):
         self.discrepancy_epsilon = discrepancy_epsilon
         self.temperature = temperature
         self.dampening = dampening
+        # 新增属性
+        self.use_iterative_refinement = use_iterative_refinement
+        self.use_learnable_partition = use_learnable_partition
+        self.refinement_params = refinement_params or {
+            'max_iterations': 3,
+            'confidence_threshold': 0.8,
+            'purity_threshold': 0.9
+        }
+
+        # 初始化可学习分区模型
+        self.learnable_model = None
 
     def forward(
             self,
@@ -138,7 +154,7 @@ class InstancePartitioner(nn.Module):
 
         # If not grid searching optimal partition parameters, simply run
         # the partition with the current parameters
-        return instance_cut_pursuit(
+        return instance_cut_pursuit_improved(
             batch,
             node_x,
             node_logits,
@@ -146,6 +162,10 @@ class InstancePartitioner(nn.Module):
             node_size,
             edge_index,
             edge_affinity_logits,
+            use_iterative_refinement=self.use_iterative_refinement,
+            use_learnable_partition=self.use_learnable_partition,
+            learnable_model=self.learnable_model,
+            refinement_params=self.refinement_params,
             loss_type=self.loss_type,
             regularization=self.regularization,
             x_weight=self.x_weight,

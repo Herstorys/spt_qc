@@ -19,13 +19,13 @@ _point_mlp: [32, 64, 64]  # point encoder layers
 # Importantly, we pass `dims` to characterize the MLP layers. The size
 # of the first layer is directly computed from the config
 edge_affinity_head:
-  _target_: src.nn.KAN
-  dims: ${eval:'[ ${model._up_dim}[-1], 32, 16, 1 ]'}
-#  activation:
-#    _target_: torch.nn.LeakyReLU
-#  norm: null
-#  last_norm: False
-#  last_activation: False
+  _target_: src.nn.MLP
+  dims: ${eval:'[ ${model._up_dim}[-1] * 2, 32, 16, 1 ]'}
+  activation:
+    _target_: torch.nn.LeakyReLU
+  norm: null
+  last_norm: False
+  last_activation: False
 
 # Instance/panoptic partitioner module. See the `InstancePartitioner`
 # documentation for more details on the available parameters

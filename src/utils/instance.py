@@ -677,6 +677,169 @@ def instance_cut_pursuit(
     return final_obj_index
 
 
+def instance_cut_pursuit_improved(
+        batch,
+        node_x,
+        node_logits,
+        stuff_classes,
+        node_size,
+        edge_index,
+        edge_affinity_logits,
+        use_iterative_refinement=False,
+        use_learnable_partition=False,
+        learnable_model=None,
+        refinement_params=None,
+        loss_type='l2_kl',
+        regularization=1e-2,
+        x_weight=1,
+        p_weight=1,
+        cutoff=1,
+        parallel=True,
+        iterations=10,
+        trim=False,
+        discrepancy_epsilon=1e-4,
+        temperature=1,
+        dampening=0,
+        verbose=False):
+    """改进版的instance_cut_pursuit，支持迭代细化和可学习分区
+
+    新增参数:
+    :param use_iterative_refinement: bool
+        是否使用迭代式分区细化
+    :param use_learnable_partition: bool
+        是否使用可学习分区模块
+    :param learnable_model: LearnablePartitionModule
+        训练好的可学习分区模型
+    :param refinement_params: dict
+        迭代细化的参数配置
+    """
+
+    # 使用改进版的分区函数
+    obj_index = _instance_cut_pursuit_improved(
+        node_x,
+        node_logits,
+        node_size,
+        edge_index,
+        edge_affinity_logits,
+        use_iterative_refinement=use_iterative_refinement,
+        use_learnable_partition=use_learnable_partition,
+        learnable_model=learnable_model,
+        refinement_params=refinement_params,
+        loss_type=loss_type,
+        regularization=regularization,
+        x_weight=x_weight,
+        p_weight=p_weight,
+        cutoff=cutoff,
+        parallel=parallel,
+        iterations=iterations,
+        trim=trim,
+        discrepancy_epsilon=discrepancy_epsilon,
+        temperature=temperature,
+        dampening=dampening,
+        verbose=verbose)
+
+    # 计算平均logits和stuff合并（保持原有逻辑）
+    obj_logits = scatter_mean_weighted(node_logits, obj_index, node_size)
+    obj_y = obj_logits.argmax(dim=1)
+    obj_is_stuff = get_stuff_mask(obj_y, stuff_classes)
+
+    node_obj_y = obj_y[obj_index]
+    node_is_stuff = obj_is_stuff[obj_index]
+
+    batch = batch if batch is not None else torch.zeros_like(obj_index)
+    num_batch_items = batch.max() + 1
+    final_obj_index = obj_index.clone()
+    final_obj_index[node_is_stuff] = \
+        obj_index.max() + 1 \
+        + node_obj_y[node_is_stuff] * num_batch_items \
+        + batch[node_is_stuff]
+    final_obj_index, perm = consecutive_cluster(final_obj_index)
+
+    return final_obj_index
+
+
+def _instance_cut_pursuit_improved(
+        node_x,
+        node_logits,
+        node_size,
+        edge_index,
+        edge_affinity_logits,
+        use_iterative_refinement=False,
+        use_learnable_partition=False,
+        learnable_model=None,
+        refinement_params=None,
+        **kwargs):
+    """改进版的实例分割，支持迭代细化和可学习分区"""
+
+    device = node_x.device
+
+    # 执行原始的cut-pursuit分区
+    initial_partition = _instance_cut_pursuit(
+        node_x, node_logits, node_size, edge_index,
+        edge_affinity_logits, **kwargs)
+
+    current_partition = initial_partition
+
+    # 迭代式分区细化
+    if use_iterative_refinement and SKLEARN_AVAILABLE:
+        refinement_params = refinement_params or {}
+        refinement_module = IterativePartitionRefinement(**refinement_params)
+
+        # 创建虚拟的nag对象，只包含sub属性
+        class DummyNAG:
+            def __init__(self, partition):
+                self.sub = partition
+
+        dummy_nag = DummyNAG(current_partition)
+        current_partition = refinement_module.refine_partition(
+            dummy_nag, node_x, node_logits, edge_index,
+            edge_affinity_logits.sigmoid())
+
+    # 可学习分区调整
+    if use_learnable_partition and learnable_model is not None:
+        with torch.no_grad():
+            edge_weights, split_decisions = learnable_model(
+                node_x, edge_index, current_partition)
+
+            current_partition = _apply_learned_splits(
+                current_partition, split_decisions, node_x, edge_index, edge_weights)
+
+    return current_partition
+
+def _apply_learned_splits(partition, split_decisions, node_features, edge_index, edge_weights):
+    """应用学习到的分割决策"""
+    refined_partition = partition.clone()
+    next_id = partition.max() + 1
+
+    for sp_id, split_prob in split_decisions.items():
+        if split_prob > 0.5:
+            sp_mask = (partition == sp_id)
+            sp_indices = torch.where(sp_mask)[0]
+
+            if len(sp_indices) > 3:
+                # 简单的二分割策略：基于特征相似性分割
+                sp_features = node_features[sp_indices]
+                if len(sp_indices) >= 4:
+                    # 使用K-means进行二分割
+                    try:
+                        from sklearn.cluster import KMeans
+                        kmeans = KMeans(n_clusters=2, random_state=42, n_init=10)
+                        sub_labels = kmeans.fit_predict(sp_features.cpu().numpy())
+
+                        # 更新分区
+                        mask_1 = sub_labels == 1
+                        if mask_1.sum() > 0:
+                            refined_partition[sp_indices[mask_1]] = next_id
+                            next_id += 1
+                    except:
+                        # 如果聚类失败，使用简单的二分法
+                        mid_point = len(sp_indices) // 2
+                        refined_partition[sp_indices[mid_point:]] = next_id
+                        next_id += 1
+
+    return refined_partition
+
+
 def oracle_superpoint_clustering(
         nag,
         num_classes,
