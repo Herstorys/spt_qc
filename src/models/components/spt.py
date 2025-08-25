@@ -431,9 +431,7 @@ class SPT(nn.Module):
             num_down + self.nano,
             mlp_activation,
             mlp_norm,
-            share_hf_mlps,
-            use_kan=use_kan,
-            kan_config=kan_config)
+            share_hf_mlps)
 
         h_edge_mlp = h_edge_mlp if needs_h_edge_hf else None
         self.h_edge_mlps = _build_mlps(
@@ -441,9 +439,7 @@ class SPT(nn.Module):
             num_down + self.nano,
             mlp_activation,
             mlp_norm,
-            share_hf_mlps,
-            use_kan=use_kan,
-            kan_config=kan_config)
+            share_hf_mlps)
 
         v_edge_mlp = v_edge_mlp if needs_v_edge_hf else None
         self.v_edge_mlps = _build_mlps(
@@ -451,9 +447,7 @@ class SPT(nn.Module):
             num_down,
             mlp_activation,
             mlp_norm,
-            share_hf_mlps,
-            use_kan=use_kan,
-            kan_config=kan_config)
+            share_hf_mlps)
 
         # Module operating on Level-0 points in isolation
         if self.nano:
