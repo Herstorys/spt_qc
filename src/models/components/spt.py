@@ -1,3 +1,4 @@
+import logging
 import torch
 from torch import nn
 from src.utils import listify_with_reference
@@ -8,6 +9,8 @@ from src.nn.pool import pool_factory
 from src.models.components.pnp3d import PnP3D
 from src.models.components.group_atte import GroupAttention
 from omegaconf import OmegaConf
+
+log = logging.getLogger(__name__)
 
 __all__ = ['SPT']
 
@@ -672,6 +675,25 @@ class SPT(nn.Module):
                     nn.Sigmoid()
                 )
 
+        # GroupAttention模块：应用在最深层特征上
+        self.use_group_attention = use_group_attention
+        if use_group_attention:
+            deepest_dim = down_dim[-1] if down_dim else 64
+            # num_heads 必须能被 num_groups 整除；取 down_num_heads 的最后一个值
+            num_heads_deepest = down_num_heads[-1] if down_num_heads else 1
+            # 保证 num_groups <= num_heads
+            effective_groups = min(num_attention_groups, num_heads_deepest)
+            # 保证 num_heads 能被 num_groups 整除
+            while num_heads_deepest % effective_groups != 0:
+                effective_groups -= 1
+            effective_groups = max(1, effective_groups)
+            self.group_attention = GroupAttention(
+                embed_dim=deepest_dim,
+                num_heads=num_heads_deepest,
+                num_groups=effective_groups,
+                group_mode=group_attention_mode
+            )
+
         assert self.num_up_stages > 0 or not self.output_stage_wise, \
             "At least one up stage is needed for output_stage_wise=True"
 
@@ -787,23 +809,28 @@ class SPT(nn.Module):
                 # Add the diameter to the next level's attributes
                 nag[i_level + 1].diameter = diameter
 
-            if self.use_pnp3d:
-                # 在最深层特征上应用PnP3D
-                deepest_level = len(down_outputs) - 1
-                # 确保使用匹配的位置和特征数据
-                # 使用当前级别NAG的位置信息，而不是原始位置
-                current_level_idx = deepest_level + (1 if not self.nano else 0)
-                if current_level_idx < nag.num_levels:
-                    current_pos = nag[current_level_idx].pos
-                    current_features = down_outputs[deepest_level]
+            # 在最深层特征上依次应用PnP3D和GroupAttention
+            deepest_level = len(down_outputs) - 1
+            current_level_idx = deepest_level + (1 if not self.nano else 0)
 
-                    # 验证点数是否匹配
-                    if current_pos.size(0) == current_features.size(0):
-                        x = self._apply_pnp3d(current_features, current_pos)
-                        down_outputs[deepest_level] = x
-                    else:
-                        print(f"Warning: Skipping PnP3D due to dimension mismatch: "
-                              f"pos {current_pos.size(0)} vs features {current_features.size(0)}")
+            if self.use_pnp3d and current_level_idx < nag.num_levels:
+                current_pos = nag[current_level_idx].pos
+                current_features = down_outputs[deepest_level]
+                if current_pos.size(0) == current_features.size(0):
+                    x = self._apply_pnp3d(current_features, current_pos)
+                    down_outputs[deepest_level] = x
+                else:
+                    log.warning(
+                        "Skipping PnP3D due to dimension mismatch: "
+                        "pos %d vs features %d",
+                        current_pos.size(0), current_features.size(0))
+
+            if self.use_group_attention:
+                current_features = down_outputs[deepest_level]
+                current_pos = nag[current_level_idx].pos \
+                    if current_level_idx < nag.num_levels else None
+                down_outputs[deepest_level] = self.group_attention(
+                    current_features, pos=current_pos)
 
         # Iteratively decode level-num_down_stages and below
         up_outputs = []

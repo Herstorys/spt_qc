@@ -21,16 +21,13 @@ def get_neighbors(x, feature, k=20, idx=None):
     '''
     batch_size = x.size(0)
     num_points = x.size(2)
+    device = x.device
     x = x.view(batch_size, -1, num_points)
     if idx is None:
         idx = knn(x, k=k)  # (batch_size, num_points, k)
-    device = torch.device('cuda')
 
     idx_base = torch.arange(0, batch_size, device=device).view(-1, 1, 1) * num_points
-    idx_base = idx_base.type(torch.cuda.LongTensor)
-    idx = idx.type(torch.cuda.LongTensor)
-    idx = idx + idx_base
-    idx = idx.view(-1)
+    idx = (idx.long() + idx_base.long()).view(-1)
 
     _, num_dims, _ = x.size()
 
@@ -55,29 +52,11 @@ def get_neighbors(x, feature, k=20, idx=None):
     return neighbor_x, neighbor_feat
 
 
-class Mish(nn.Module):
-    '''new activation function'''
-
-    def __init__(self):
-        super().__init__()
-
-    @staticmethod
-    def forward(ctx):
-        ctx = ctx * (torch.tanh(F.softplus(ctx)))
-        return ctx
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        input_grad = (torch.exp(ctx) * (4 * (ctx + 1) + 4 * torch.exp(2 * ctx) + torch.exp(3 * ctx) +
-                                        torch.exp(ctx) * (4 * ctx + 6))) / (2 * torch.exp(ctx) + torch.exp(2 * ctx) + 2)
-        return input_grad
-
-
 class PnP3D(nn.Module):
     def __init__(self, input_features_dim):
         super(PnP3D, self).__init__()
 
-        self.mish = Mish()
+        self.mish = nn.Mish()
 
         self.conv_mlp1 = nn.Conv2d(6, input_features_dim // 2, 1)
         self.bn_mlp1 = nn.BatchNorm2d(input_features_dim // 2)
@@ -121,8 +100,8 @@ class PnP3D(nn.Module):
         f_encoding_1 = F.relu(self.conv_down1(f_encoding))  # B,C/8,N
         f_encoding_2 = F.relu(self.conv_down2(f_encoding))  # B,C/8,N
 
-        f_encoding_channel = f_encoding_1.mean(dim=-1, keepdim=True)[0]  # B,C/8,1
-        f_encoding_space = f_encoding_2.mean(dim=1, keepdim=True)[0]  # B,1,N
+        f_encoding_channel = f_encoding_1.mean(dim=-1, keepdim=True)  # B,C/8,1
+        f_encoding_space = f_encoding_2.mean(dim=1, keepdim=True)  # B,1,N
         final_encoding = torch.matmul(f_encoding_channel, f_encoding_space)  # B,C/8,N
         final_encoding = torch.sqrt(final_encoding + 1e-12)  # B,C/8,N
         final_encoding = final_encoding + f_encoding_1 + f_encoding_2  # B,C/8,N
